@@ -1,35 +1,35 @@
-# Wazuh AI Attack-Chain Reconstruction — Project Report
+# Laporan Proyek Wazuh AI Attack-Chain Reconstruction
 
-*Data current as of: Jun 18, 2026*
-
----
-
-## 1. What Is This Program?
-
-An **AI-powered security operations pipeline** that turns raw Wazuh alerts into reconstructed attack chains with actionable incident reports — delivered automatically to the security team via Discord.
-
-Instead of analysts manually sifting through thousands of log lines to figure out *what happened, in what order, and what to do next*, the system:
-
-1. **Collects** every Wazuh alert and raw log into a unified MongoDB data lake.
-2. **Correlates** alerts from the same source IP into a single "attack session" — tagging MITRE ATT&CK phases (Initial Access, Discovery, Execution, Persistence) as the attack unfolds.
-3. **Analyzes** each high/critical session with a local LLM that reads the full event timeline and writes a structured investigation report (summary, confidence score, attack phases, recommended actions).
-4. **Dispatches** the report to Discord with a color-coded embed the moment confidence is high enough.
-
-**No cloud APIs, no external LLM vendors, no per-token costs** — the AI model runs entirely on the same VPS as Wazuh.
+*Data per: 18 Jun 2026*
 
 ---
 
-## 2. Main Objective
+## 1. Apa Itu Program Ini?
 
-**Reduce mean-time-to-respond (MTTR) for security incidents by automating the most time-consuming part of SOC work: making sense of a flood of alerts.**
+Sebuah **pipeline security operations bertenaga AI** yang mengubah alert mentah dari Wazuh menjadi rekonstruksi attack chain lengkap dengan laporan insiden yang actionable — dikirim otomatis ke tim security melalui Discord.
 
-A single attacker hitting a web app for 10 minutes can generate **100+ alerts** (recon, SQLi, RCE, file upload, reverse shell). A human analyst has to read all of them, figure out the order, identify the attack stages, and decide what to do. That takes 30–60 minutes per incident.
+Alih-alih analis harus menyortir manual ribuan baris log untuk mencari tahu *apa yang terjadi, dalam urutan seperti apa, dan apa yang harus dilakukan selanjutnya*, sistem ini:
 
-This pipeline does it in **~3 minutes**, unattended, 24/7, and posts the result to the team's chat channel.
+1. **Mengumpulkan** setiap alert dan raw log dari Wazuh ke dalam satu data lake MongoDB terpusat.
+2. **Mengorelasikan** alert dari source IP yang sama menjadi satu "sesi serangan" — menandai fase MITRE ATT&CK (Initial Access, Discovery, Execution, Persistence) seiring serangan berlangsung.
+3. **Menganalisis** setiap sesi berkategori high/critical menggunakan LLM lokal yang membaca seluruh timeline event dan menulis laporan investigasi terstruktur (ringkasan, skor confidence, fase serangan, tindakan yang direkomendasikan).
+4. **Mengirimkan** laporan tersebut ke Discord dengan embed berkode warna begitu confidence-nya cukup tinggi.
+
+**Tanpa cloud API, tanpa vendor LLM eksternal, tanpa biaya per-token** — model AI berjalan sepenuhnya di VPS yang sama dengan Wazuh.
 
 ---
 
-## 3. Architecture — Three Core Modules
+## 2. Tujuan Utama
+
+**Mengurangi mean-time-to-respond (MTTR) untuk insiden keamanan dengan mengotomatisasi bagian paling memakan waktu dari pekerjaan SOC: memahami banjir alert.**
+
+Seorang penyerang yang menyerang aplikasi web selama 10 menit bisa menghasilkan **100+ alert** (recon, SQLi, RCE, file upload, reverse shell). Analis manusia harus membaca semuanya, mencari tahu urutannya, mengidentifikasi tahapan serangan, dan memutuskan tindakan apa yang harus diambil. Itu memakan waktu 30–60 menit per insiden.
+
+Pipeline ini melakukannya dalam **~3 menit**, tanpa pengawasan, 24/7, dan mengirim hasilnya ke channel chat tim.
+
+---
+
+## 3. Arsitektur — Tiga Modul Inti
 
 ```
                        Wazuh Manager (native)
@@ -38,7 +38,7 @@ This pipeline does it in **~3 minutes**, unattended, 24/7, and posts the result 
                               |
                     +---------+---------+
                     |                   |
-              wazuh-collector     (raw logs too)
+              wazuh-collector     (raw log juga)
                     |                   |
                     v                   v
                  MongoDB (wazuh db)
@@ -57,177 +57,160 @@ This pipeline does it in **~3 minutes**, unattended, 24/7, and posts the result 
                             |
                     Ollama (qwen2.5:3b)
                             |
-                  investigation report
+                  laporan investigasi
                             |
                     Discord webhook
 ```
 
-### Module 1 — `wazuh-collector` (Go)
-- Tails `/var/ossec/logs/alerts/alerts.json` and `/var/ossec/logs/archives/archives.json` in real time.
-- Inserts every alert and raw log line as a BSON document into MongoDB.
-- Currently ingested: **337 alerts, 412,403 raw logs**.
+### Modul 1 — `wazuh-collector` (Go)
+- Melakukan tail pada `/var/ossec/logs/alerts/alerts.json` dan `/var/ossec/logs/archives/archives.json` secara real time.
+- Menyisipkan setiap alert dan baris raw log sebagai dokumen BSON ke MongoDB.
+- Saat ini sudah ter-ingest: **337 alert, 412.403 raw log**.
 
-### Module 2 — `wazuh-correlator` (Go)
-- Polls MongoDB for uncorrelated alerts every 2 seconds.
-- Groups alerts by `src_ip` into an "active session" with a 10-minute idle timeout.
-- Tags each session with MITRE ATT&CK phase booleans as matching rules arrive:
-  - **Initial Access** — login attempts, SQLi auth bypass
-  - **Discovery** — recon, sensitive endpoint access, path traversal
+### Modul 2 — `wazuh-correlator` (Go)
+- Melakukan polling ke MongoDB untuk alert yang belum dikorelasikan setiap 2 detik.
+- Mengelompokkan alert berdasarkan `src_ip` menjadi "sesi aktif" dengan idle timeout 10 menit.
+- Menandai setiap sesi dengan boolean fase MITRE ATT&CK seiring rule yang cocok masuk:
+  - **Initial Access** — percobaan login, SQLi auth bypass
+  - **Discovery** — recon, akses endpoint sensitif, path traversal
   - **Execution** — command injection, SSTI, RCE, reverse shell
-  - **Persistence** — suspicious file upload (web shell)
-- Computes a dynamic severity score (sum of rule levels) → tier (low/medium/high/critical).
-- Closes sessions after 10 min idle; high/critical sessions trigger the AI hook.
+  - **Persistence** — upload file mencurigakan (web shell)
+- Menghitung skor severity dinamis (jumlah level rule) → tier (low/medium/high/critical).
+- Menutup sesi setelah idle 10 menit; sesi high/critical memicu hook AI.
 
-### Module 3 — `ai-analyzer` (Go + Ollama)
-- Polls for high/critical sessions not yet analyzed.
-- Builds a structured prompt from the session timeline (capped at 25 key events for CPU feasibility).
-- Calls a **local Ollama model** (`qwen2.5:3b`, 1.9 GB) via its OpenAI-compatible `/v1/chat/completions` endpoint with `response_format: json_object` for guaranteed structured output.
-- Parses the LLM's JSON into a typed `InvestigationReport`:
-  - `summary` — narrative of what happened
-  - `confidence` — 1–100 score
-  - `attack_phases` — ordered list of MITRE phases
-  - `recommended_actions` — tactical containment steps
-- Persists the report to MongoDB's `investigations` collection.
-- If `confidence >= 80`, dispatches a color-coded Discord embed (red=critical, orange=high).
+### Modul 3 — `ai-analyzer` (Go + Ollama)
+- Melakukan polling untuk sesi high/critical yang belum dianalisis.
+- Menyusun prompt terstruktur dari timeline sesi (dibatasi 25 event kunci agar layak secara CPU).
+- Memanggil **model Ollama lokal** (`qwen2.5:3b`, 1.9 GB) melalui endpoint `/v1/chat/completions` yang kompatibel OpenAI, dengan `response_format: json_object` untuk menjamin output terstruktur.
+- Mem-parsing JSON dari LLM ke dalam `InvestigationReport` bertipe:
+  - `summary` — narasi tentang apa yang terjadi
+  - `confidence` — skor 1–100
+  - `attack_phases` — daftar fase MITRE yang berurutan
+  - `recommended_actions` — langkah penanggulangan taktis
+- Menyimpan laporan ke koleksi `investigations` di MongoDB.
+- Jika `confidence >= 80`, mengirim embed Discord berkode warna (merah=critical, oranye=high).
 
 ---
 
-## 4. Live Test Results
+## 4. Hasil Live Test
 
-### Test environment
-- Vulnerable web app deployed on Wazuh agent `001` (web-public) at `http://43.159.48.191:8080`.
-- 6 vulnerability classes exercised: information disclosure, SQLi, OS command injection / RCE / reverse shell, SSTI, unrestricted file upload + path traversal.
-- **40 custom Wazuh rules** (12 in `vuln_lab_rules.xml` + 28 in `local_rules.xml`) decode and detect the attack signals.
+### Lingkungan pengujian
+- Aplikasi web rentan di-deploy pada Wazuh agent `001` (web-public) di `http://43.159.48.191:8080`.
+- 6 kelas kerentanan yang diuji: information disclosure, SQLi, OS command injection / RCE / reverse shell, SSTI, unrestricted file upload + path traversal.
+- **40 rule Wazuh kustom** (12 di `vuln_lab_rules.xml` + 28 di `local_rules.xml`) men-decode dan mendeteksi sinyal serangan.
 
-### Attack simulation — 112 alerts from a single source in ~3 minutes
+### Simulasi serangan — 112 alert dari satu sumber dalam ~3 menit
 
-| Rule | Detection | Count |
+| Rule | Deteksi | Jumlah |
 |------|-----------|-------|
-| 100001 | Reconnaissance activity | 31 |
-| 100020 | Remote Code Execution confirmed | 31 |
-| 100010 | SQL Injection attempt | 15 |
-| 100011 | Command Injection attempt | 16 |
+| 100001 | Aktivitas reconnaissance | 31 |
+| 100020 | Remote Code Execution terkonfirmasi | 31 |
+| 100010 | Percobaan SQL Injection | 15 |
+| 100011 | Percobaan Command Injection | 16 |
 | 100012 | Server-Side Template Injection | 15 |
-| 100005 | Successful login | 10 |
-| 100013 | Suspicious file upload | 10 |
-| 100014 | Path traversal attempt | 10 |
-| 100021 | Reverse shell signature | 1 |
+| 100005 | Login berhasil | 10 |
+| 100013 | Upload file mencurigakan | 10 |
+| 100014 | Percobaan path traversal | 10 |
+| 100021 | Tanda tangan reverse shell | 1 |
 
-### AI-reconstructed attack chain (verbatim from the LLM)
+### Rekonstruksi attack chain oleh AI (verbatim dari LLM)
 
-**Session 1 — vuln_lab app (src: 127.0.0.1)**
+**Sesi 1 — aplikasi vuln_lab (src: 127.0.0.1)**
 - Severity: **CRITICAL** | Confidence: **95%**
-- Attack phases: **Initial Access → Discovery → Execution → Persistence**
-- LLM summary: *"The session indicates a sophisticated attack involving multiple stages including Reconnaissance, Command Injection, Remote Code Execution, and Server-Side Template Injection. The attacker has likely gained initial access through successful login attempts and is now executing malicious commands to gain persistence and execute arbitrary code with elevated privileges."*
-- Recommended actions: network segmentation, forensic analysis, disable non-essential services, patch software, review login logs.
+- Fase serangan: **Initial Access → Discovery → Execution → Persistence**
+- Ringkasan LLM: *menggambarkan sesi ini sebagai serangan canggih yang melibatkan berbagai tahapan termasuk reconnaissance, command injection, remote code execution, dan server-side template injection — dengan penyerang diduga telah memperoleh akses awal lewat percobaan login yang berhasil, lalu mengeksekusi perintah berbahaya untuk mendapatkan persistence dan menjalankan kode arbitrer dengan privilege yang lebih tinggi.*
+- Tindakan yang direkomendasikan: segmentasi jaringan, analisis forensik, menonaktifkan layanan non-esensial, patch software, meninjau log login.
 
-**Session 2 — real-world SSH brute-force (src: 114.10.47.145)**
+**Sesi 2 — SSH brute-force dunia nyata (src: 114.10.47.145)**
 - Severity: **CRITICAL** | Confidence: **95%**
-- Attack phases: **Initial Access → Discovery → Execution → Persistence → Impact**
-- The pipeline also caught a genuine external brute-force attacker hitting the server during testing — proving it works on real traffic, not just simulated attacks.
+- Fase serangan: **Initial Access → Discovery → Execution → Persistence → Impact**
+- Pipeline ini juga menangkap penyerang brute-force eksternal sungguhan yang menyerang server selama pengujian berlangsung — membuktikan sistem ini bekerja pada traffic nyata, bukan hanya serangan simulasi.
 
-Both reports were auto-dispatched to Discord as red CRITICAL embeds.
+Kedua laporan otomatis dikirim ke Discord sebagai embed merah CRITICAL.
 
 ---
 
-## 5. What This Project Can Do (Maximum Possibility)
+## 5. Apa Saja yang Bisa Dilakukan Proyek Ini (Kemungkinan Maksimal)
 
-### Immediate capabilities (working today)
-- **24/7 unattended attack-chain reconstruction** from Wazuh alerts.
-- **Per-attacker sessionization** — every source IP gets its own attack timeline.
-- **MITRE ATT&CK phase tagging** — automatically classifies which kill-chain stage each event belongs to.
-- **Local/private AI inference** — no data leaves the VPS, no API costs, GDPR/sovereignty-friendly.
-- **Real-time Discord alerting** with severity-colored embeds, evidence, and remediation steps.
-- **Structured, queryable investigation reports** persisted in MongoDB for audit trails and trend analysis.
+### Kemampuan saat ini (sudah berfungsi)
+- **Rekonstruksi attack chain tanpa pengawasan 24/7** dari alert Wazuh.
+- **Sesionisasi per-penyerang** — setiap source IP mendapat timeline serangannya sendiri.
+- **Penandaan fase MITRE ATT&CK** — otomatis mengklasifikasikan setiap event masuk tahap kill-chain yang mana.
+- **Inferensi AI lokal/privat** — tidak ada data yang keluar dari VPS, tanpa biaya API, ramah GDPR/kedaulatan data.
+- **Alerting Discord real-time** dengan embed berkode severity, bukti, dan langkah remediasi.
+- **Laporan investigasi terstruktur dan dapat di-query**, disimpan di MongoDB untuk jejak audit dan analisis tren.
 
-### Extended capabilities (low effort to unlock)
-- **Multi-vector correlation** — extend the rule maps to cover SSH brute force, web attacks, malware detection, lateral movement, C2 beaconing. The correlator architecture already supports any decoder + rule ID pairing.
-- **MITRE D3FEND countermeasure mapping** — the LLM prompt can be extended to suggest defensive techniques per detected tactic.
-- **Historical attack replay** — MongoDB stores every session + report, enabling "show me every Initial Access event this month" queries.
-- **Confidence-based escalation tiers** — route low-confidence reports to a dashboard, high-confidence to PagerDuty/Discord, critical to phone/SMS.
-- **Multi-agent fleet** — Wazuh already supports thousands of agents; the pipeline scales horizontally by sharding MongoDB.
-- **LLM swapping** — Ollama supports any GGUF model. Swap `qwen2.5:3b` for `llama3.1:8b` or a fine-tuned security model when GPU is available.
-- **Feedback loop** — store analyst corrections to investigation reports → build a fine-tuning dataset → improve the model over time.
+### Kemampuan lanjutan (effort rendah untuk diaktifkan)
+- **Korelasi multi-vektor** — perluas peta rule untuk mencakup SSH brute force, web attack, deteksi malware, lateral movement, C2 beaconing. Arsitektur correlator sudah mendukung pemetaan decoder + rule ID apa pun.
+- **Pemetaan countermeasure MITRE D3FEND** — prompt LLM bisa diperluas untuk menyarankan teknik defensif per taktik yang terdeteksi.
+- **Replay serangan historis** — MongoDB menyimpan setiap sesi + laporan, memungkinkan query seperti "tampilkan semua event Initial Access bulan ini".
+- **Tier eskalasi berbasis confidence** — laporan confidence rendah diarahkan ke dashboard, confidence tinggi ke PagerDuty/Discord, critical ke telepon/SMS.
+- **Fleet multi-agent** — Wazuh sudah mendukung ribuan agent; pipeline ini scale secara horizontal dengan men-shard MongoDB.
+- **Pertukaran LLM** — Ollama mendukung model GGUF apa pun. Ganti `qwen2.5:3b` dengan `llama3.1:8b` atau model security hasil fine-tuning saat GPU tersedia.
+- **Feedback loop** — menyimpan koreksi analis terhadap laporan investigasi → membangun dataset fine-tuning → meningkatkan model dari waktu ke waktu.
 
-### Advanced possibilities (larger vision)
-- **Autonomous SOC Tier-1 triage** — the pipeline already does the work of a junior analyst reading alerts and writing a first-draft report. With human-in-the-loop approval, it can become a full auto-triage system.
-- **Threat-intelligence enrichment** — before LLM analysis, enrich each src_ip with GeoIP, ASN, reputation feeds, and prior-incident history. The LLM then reasons over richer context.
-- **Cross-session attack campaign detection** — correlate multiple sessions across different IPs/timeframes that share TTPs (same payloads, same user-agents) into a "campaign" entity.
-- **Predictive scoring** — train on historical sessions to predict which low-severity sessions are likely to escalate, enabling proactive blocking before the attack completes.
-- **Active response integration** — wire the AI's recommended actions back into Wazuh active-response scripts (e.g., auto-block src_ip at firewall when confidence > 90).
-- **Compliance reporting** — auto-generate PCI-DSS / ISO 27001 / NIST 800-53 incident reports from the structured investigation data.
+### Kemungkinan lanjutan (visi yang lebih besar)
+- **Triase Tier-1 SOC otonom** — pipeline ini sudah melakukan pekerjaan analis junior dalam membaca alert dan menulis draf laporan pertama. Dengan persetujuan human-in-the-loop, ini bisa berkembang menjadi sistem auto-triage penuh.
+- **Pengayaan threat-intelligence** — sebelum analisis LLM, perkaya setiap src_ip dengan GeoIP, ASN, reputation feed, dan riwayat insiden sebelumnya. LLM kemudian bernalar dengan konteks yang lebih kaya.
+- **Deteksi kampanye serangan lintas-sesi** — mengorelasikan beberapa sesi dari IP/rentang waktu berbeda yang memiliki TTP sama (payload sama, user-agent sama) menjadi satu entitas "kampanye".
+- **Skor prediktif** — dilatih dari sesi historis untuk memprediksi sesi severity rendah mana yang kemungkinan akan meningkat, memungkinkan pemblokiran proaktif sebelum serangan selesai.
+- **Integrasi active response** — menghubungkan tindakan rekomendasi AI kembali ke script active-response Wazuh (misalnya, auto-block src_ip di firewall saat confidence > 90).
+- **Pelaporan kepatuhan** — otomatis menghasilkan laporan insiden PCI-DSS / ISO 27001 / NIST 800-53 dari data investigasi terstruktur.
 
 ---
 
-## 6. How Useful Is It? (Value Proposition)
+## 6. Seberapa Bergunanya Ini? (Value Proposition)
 
-### For the SOC team
-| Without this pipeline | With this pipeline |
+### Untuk tim SOC
+| Tanpa pipeline ini | Dengan pipeline ini |
 |---|---|
-| Analyst reads 100+ alerts per incident | Analyst reads 1 structured report |
-| 30–60 min to reconstruct the attack chain | ~3 min, fully automated |
-| Manual MITRE phase classification | Automatic phase tagging |
-| Alert fatigue → missed incidents | Backlog stays at 0, nothing missed |
-| Ad-hoc, inconsistent remediation notes | Standardized, LLM-generated action lists |
+| Analis membaca 100+ alert per insiden | Analis membaca 1 laporan terstruktur |
+| 30–60 menit untuk merekonstruksi attack chain | ~3 menit, sepenuhnya otomatis |
+| Klasifikasi fase MITRE manual | Penandaan fase otomatis |
+| Alert fatigue → insiden terlewat | Backlog tetap di 0, tidak ada yang terlewat |
+| Catatan remediasi ad-hoc, tidak konsisten | Daftar tindakan terstandardisasi, dihasilkan LLM |
 
-### For the organization
-- **Cost**: Runs on a single 4-vCPU / 8 GB VPS that already hosts Wazuh. **Zero marginal cost per incident analyzed** vs. $0.01–0.05 per 1K tokens with OpenAI/Anthropic.
-- **Privacy**: Attack data never leaves your infrastructure. Critical for regulated industries (finance, healthcare, government).
-- **Reliability**: All 5 services (wazuh-manager, collector, correlator, ai-analyzer, ollama) are systemd-managed with `Restart=always` — survive reboots and crashes automatically.
-- **Auditability**: Every alert → session → investigation report is persisted in MongoDB with timestamps, enabling full incident postmortems and compliance evidence.
+### Untuk organisasi
+- **Biaya**: Berjalan di satu VPS 4-vCPU / 8 GB yang sudah meng-host Wazuh. **Tanpa biaya marjinal per insiden yang dianalisis** dibanding $0,01–0,05 per 1K token dengan OpenAI/Anthropic.
+- **Privasi**: Data serangan tidak pernah keluar dari infrastruktur Anda. Krusial untuk industri yang diatur ketat (finansial, kesehatan, pemerintahan).
+- **Reliabilitas**: Semua 5 layanan (wazuh-manager, collector, correlator, ai-analyzer, ollama) dikelola systemd dengan `Restart=always` — bertahan dari reboot dan crash secara otomatis.
+- **Auditabilitas**: Setiap alert → sesi → laporan investigasi disimpan di MongoDB dengan timestamp, memungkinkan postmortem insiden penuh dan bukti kepatuhan.
 
 ---
 
-## 7. Current Limitations & Constraints
+## 7. Keterbatasan & Kendala Saat Ini
 
-| Limitation | Detail | Mitigation |
+| Keterbatasan | Detail | Mitigasi |
 |---|---|---|
-| CPU-only inference | No GPU on VPS; qwen2.5:3b runs at ~1.5 tok/s | Event cap (25) keeps prompts feasible (~3 min/analysis). Add GPU for 10x speedup. |
-| Single concurrent LLM request | Ollama processes one session at a time | Adequate for low alert volume; scale with Ollama parallel slots or queueing for higher throughput. |
-| Rule-dependent coverage | Only alerts matching mapped rules create sessions | Extending the rule maps (a config change, not code) adds new attack classes in minutes. |
-| 10-min session timeout | Long attacks spanning >10 min idle split into multiple sessions | Tunable in correlator; can be raised or made per-rule. |
-| Discord-only alerting | WhatsApp webhook removed; Discord is the sole channel | Webhook abstraction is a small refactor; Slack/Teams/Email are straightforward additions. |
+| Inferensi CPU-only | Tidak ada GPU di VPS; qwen2.5:3b berjalan di ~1,5 tok/s | Batas event (25) menjaga prompt tetap layak (~3 menit/analisis). Tambahkan GPU untuk percepatan 10x. |
+| Satu request LLM bersamaan | Ollama memproses satu sesi pada satu waktu | Memadai untuk volume alert rendah; scale dengan parallel slot Ollama atau queueing untuk throughput lebih tinggi. |
+| Cakupan bergantung pada rule | Hanya alert yang cocok dengan rule yang dipetakan yang membuat sesi | Memperluas peta rule (perubahan konfigurasi, bukan kode) menambahkan kelas serangan baru dalam hitungan menit. |
+| Session timeout 10 menit | Serangan panjang yang idle >10 menit terpecah jadi beberapa sesi | Dapat diatur di correlator; bisa dinaikkan atau dibuat per-rule. |
+| Alerting hanya via Discord | Webhook WhatsApp telah dihapus; Discord menjadi satu-satunya channel | Abstraksi webhook adalah refactor kecil; Slack/Teams/Email adalah penambahan yang mudah. |
 
 ---
 
 ## 8. Tech Stack
 
-| Layer | Technology |
+| Layer | Teknologi |
 |---|---|
 | SIEM | Wazuh 4.14.5 (native, systemd) |
-| Detection | 40 custom rules (XML) + custom JSON decoder |
+| Deteksi | 40 rule kustom (XML) + decoder JSON kustom |
 | Data lake | MongoDB 8 (Docker) |
-| Collection / Correlation / Analysis | Go 1.26 (3 standalone daemons) |
-| AI inference | Ollama 0.30.10 + qwen2.5:3b (Q4_K_M, 1.9 GB) |
-| Notification | Discord webhooks (embeds) |
-| Deployment | systemd units (auto-start, auto-restart) |
+| Collection / Correlation / Analysis | Go 1.26 (3 daemon mandiri) |
+| Inferensi AI | Ollama 0.30.10 + qwen2.5:3b (Q4_K_M, 1.9 GB) |
+| Notifikasi | Discord webhook (embed) |
+| Deployment | systemd unit (auto-start, auto-restart) |
 
 ---
 
-## 9. Resource Footprint
+## 9. Pemakaian Resource
 
-| Resource | Usage |
+| Resource | Pemakaian |
 |---|---|
-| vCPU | 4 cores (shared across Wazuh + MongoDB + Ollama + Go daemons) |
-| RAM | ~5.7 GB used / 7.8 GB total (Ollama ~2.2 GB, MongoDB ~1.4 GB, Wazuh ~1.5 GB) |
-| Disk | 39 GB used / 154 GB (raw_logs growing fastest at ~400K docs) |
-| Network | All inference is localhost (127.0.0.1:11434); only outbound is Discord webhook |
+| vCPU | 4 core (dibagi antara Wazuh + MongoDB + Ollama + Go daemon) |
+| RAM | ~5,7 GB terpakai / 7,8 GB total (Ollama ~2,2 GB, MongoDB ~1,4 GB, Wazuh ~1,5 GB) |
+| Disk | 39 GB terpakai / 154 GB (raw_logs tumbuh paling cepat, ~400K dokumen) |
+| Network | Semua inferensi berjalan localhost (127.0.0.1:11434); satu-satunya koneksi keluar adalah Discord webhook |
 
 ---
-
-## 10. Suggested Presentation Deck Outline
-
-1. **Title slide** — "AI-Powered Attack Chain Reconstruction on Wazuh"
-2. **Problem** — alert overload, manual correlation, slow MTTR
-3. **Solution overview** — 3-module pipeline diagram (collector → correlator → AI analyzer)
-4. **How it works** — live data flow animation (alert → session → LLM → Discord)
-5. **Live demo results** — the 112-alert → 1 critical report transformation; show the Discord embed screenshot
-6. **MITRE mapping** — attack phases reconstructed by the LLM
-7. **Cost & privacy advantage** — local LLM, zero API cost, data sovereignty
-8. **Architecture** — tech stack slide
-9. **Roadmap** — multi-vector correlation, threat intel enrichment, active response, campaign detection
-10. **Q&A**
-
----
-
-*Generated from live system data. All numbers reflect actual MongoDB/state at time of writing.*
